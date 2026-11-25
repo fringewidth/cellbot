@@ -103,7 +103,7 @@ class Server:
                 return None
             scene = None
             while scene is None:
-                scene = T.sample_scene(self.rng, cheeses=(2, 5), boxes=(0, 2))
+                scene = T.sample_scene(self.rng, cheeses=(3, 5), boxes=(0, 2), require=("red", "green"))  # the page's prompts need both
             session = Session(scene)
             session.suggestion = steer.suggest(scene, SUGGESTIONS, self.rng) or ""
             self.sessions[sid] = session
@@ -215,11 +215,11 @@ def app(server, page=SITE):
 
     @api.get("/")
     def index():
-        return FileResponse(page)
+        return FileResponse(page, headers={"Cache-Control": "no-cache"})  # a redeploy shows at once
 
     @api.get("/replay.json")
     def recorded():
-        return FileResponse(page.with_name("replay.json"))
+        return FileResponse(page.with_name("replay.json"), headers={"Cache-Control": "no-cache"})
 
     @api.get("/api/status")
     def status():

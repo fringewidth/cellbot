@@ -64,6 +64,12 @@
   button { font: 500 13px/1 var(--sans); border-radius: 9px; cursor: pointer; transition: background .2s, border-color .2s, color .2s; }
   .go { border: 0; background: var(--ink); color: var(--paper); padding: 12px 16px; }
   .go:hover { background: #3a3a36; }
+  .go:disabled { opacity: .3; cursor: default; }
+  form:has(input:disabled) { background: transparent; }
+  input:disabled { cursor: default; }
+  .chips.off .chip { opacity: .4; pointer-events: none; }
+  .pill.start { color: var(--paper); background: var(--ink); border-color: var(--ink); }
+  .pill.start:hover { background: #3a3a36; color: var(--paper); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; align-items: center; }
   .chip { white-space: nowrap; }
   .controls { position: absolute; right: 12px; top: 12px; z-index: 2; display: flex; gap: 6px; align-items: center; }
@@ -178,7 +184,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname) || location.hostname.endsWith(".modal.run");
-const API = LOCAL ? "" : "https://fringewidth--cellbot.modal.run";
+const API = LOCAL ? "" : "https://fringewidth--cellbot.us-east.modal.run";
 const PROMPTS = ["eat the red cheese", "eat the green cheese", "stop", "move to the top right corner", "clear the board"];
 const COLOURS = {  // cellbot.sim.world's palette, by index
   names: ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "pink"],
@@ -316,21 +322,57 @@ function f16(b64) {
   }
   return out;
 }
-const player = { queue: [], current: null, started: 0, stepMs: 250, frames: 6, last: null };
-function enqueue(steps) { for (const s of steps) player.queue.push({ ...s, data: f16(s.path) }); }
-function advance(now) {
-  if (!world) return;
-  if (!player.current || now - player.started >= player.stepMs) {
-    if (!player.queue.length) { if (player.current) pose(player.current.data.subarray(lastFrameOffset(player.current))); return; }
-    const lag = player.queue.length > 6 ? 0.6 : 1;  // catch up when behind
-    player.current = player.queue.shift(); player.started = now; player.stepMsNow = player.stepMs * lag;
-    onStep(player.current);
+// Playback: every step holds F snapshots of MuJoCo positions. The view moves through them at a steady
+// rate and interpolates between neighbours (also across steps), so motion is smooth. Live steps arrive
+// unevenly over the network, so live playback keeps about BUFFER steps in hand and nudges its speed to
+// hold that, instead of stalling and jumping.
+const BUFFER = 2;
+const player = { queue: [], current: null, progress: 0, stepMs: 250, live: false, waiting: true, lastNow: 0, arrivals: [] };
+let scratch = null;
+function enqueue(steps) {
+  const per = world ? (world.n + world.cheeses.length) * 2 : 0;
+  for (const s of steps) {
+    const data = f16(s.path);
+    if (per && data.length % per === 0) player.queue.push({ ...s, data });  // a step of another scene never plays
   }
-  const cur = player.current, per = (world.n + world.cheeses.length) * 2, frames = cur.data.length / per;
-  const f = Math.min(frames - 1, Math.floor(((now - player.started) / (player.stepMsNow || player.stepMs)) * frames));
-  pose(cur.data.subarray(f * per, (f + 1) * per));
+  if (player.live && steps.length) {  // learn the real step rate from arrivals
+    const now = performance.now();
+    player.arrivals.push([now, steps.length]);
+    player.arrivals = player.arrivals.filter(([t]) => now - t < 8000);
+    const span = now - player.arrivals[0][0], count = player.arrivals.slice(1).reduce((n, [, k]) => n + k, 0);
+    if (span > 1500 && count > 0) player.stepMs = Math.min(700, Math.max(120, 0.8 * player.stepMs + 0.2 * (span / count)));
+  }
 }
-function lastFrameOffset(step) { const per = (world.n + world.cheeses.length) * 2; return step.data.length - per; }
+function resetPlayer(live, stepMs) {
+  Object.assign(player, { queue: [], current: null, progress: 0, live, waiting: live, stepMs, arrivals: [] });
+}
+function advance(now) {
+  const dt = Math.min(100, now - (player.lastNow || now));
+  player.lastNow = now;
+  if (!world) return;
+  if (player.waiting) {  // fill the buffer before starting
+    if (player.queue.length < BUFFER) return;
+    player.waiting = false;
+  }
+  let rate = 1;
+  if (player.live) rate = Math.min(1.8, Math.max(0.6, 1 + 0.3 * (player.queue.length - BUFFER)));
+  if (!player.current) {
+    if (!player.queue.length) return;
+    player.current = player.queue.shift(); player.progress = 0; onStep(player.current);
+  }
+  player.progress += (dt / player.stepMs) * rate;
+  while (player.progress >= 1 && player.queue.length) {
+    player.progress -= 1; player.current = player.queue.shift(); onStep(player.current);
+  }
+  if (player.progress >= 1) { player.progress = 1; if (player.live) player.waiting = true; }  // ran dry: hold, then refill
+  const cur = player.current, per = (world.n + world.cheeses.length) * 2, frames = cur.data.length / per;
+  const x = player.progress * frames, i = Math.min(frames - 1, Math.floor(x)), f = Math.min(1, x - i);
+  const a = cur.data.subarray(i * per, (i + 1) * per);
+  const b = i + 1 < frames ? cur.data.subarray((i + 1) * per, (i + 2) * per) : player.queue.length ? player.queue[0].data.subarray(0, per) : a;
+  if (!scratch || scratch.length !== per) scratch = new Float32Array(per);
+  for (let k = 0; k < per; k++) scratch[k] = a[k] + (b[k] - a[k]) * f;
+  pose(scratch);
+}
 function onStep(step) {
   step.alive.forEach((a, k) => { if (!a && world.alive[k]) { world.alive[k] = false; world.shrink.set(k, performance.now()); } });
   for (const e of step.events || []) toast(e);
@@ -360,16 +402,16 @@ async function startReplay() {
     if (mode !== "replay") return;
     buildWorld(replay.start);
     pose(f16(replay.start.positions));
-    player.queue = []; player.current = null; player.stepMs = 1000 / 5;
+    resetPlayer(false, 1000 / 5);
     enqueue(replay.steps.map((s) => ({ ...s, command: replay.commands[s.command] })));
-    tag(innerWidth < 640 ? "recorded run · type below to go live" : "recorded run · type a prompt below to run it live", false);
+    tag(innerWidth < 640 ? "recorded run" : "recorded run · press run live to steer your own swarm", false);
     replayTimer = setTimeout(play, replay.steps.length * player.stepMs + 2500);
   };
   play();
 }
 
 // ---------------------------------------------------------------- live
-let sid = null, after = -1, polling = null, waking = false, lastStepAt = 0;
+let sid = null, after = -1, polling = null, waking = false, lastStepAt = 0, liveTagged = false;
 async function api(path, body) {
   const r = await fetch(API + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json().catch(() => ({}));
@@ -382,35 +424,43 @@ async function goLive() {
   const spec = await api("/api/new", { sid }).finally(loaded);
   sid = spec.sid; after = spec.t;
   mode = "live"; clearTimeout(replayTimer);
-  buildWorld(spec); pose(f16(spec.positions));
-  player.queue = []; player.current = null;
+  resetPlayer(true, 250);  // before the new scene exists: steps queued for the old one must not play on it
+  buildWorld(spec); pose(f16(spec.positions)); showCommand("");
   const st = await api("/api/status").catch(() => ({}));
   player.stepMs = (st.step_seconds || 0.25) * 1000;
-  tag("live · waiting for your first command", false);
+  tag("live · waiting for your first command", false); liveTagged = false;
   clearInterval(polling); polling = setInterval(poll, 200);
 }
+let inflight = false;
 async function poll() {
-  if (!sid) return;
+  if (!sid || inflight) return;  // one request at a time: overlapping polls would fetch the same steps twice
+  inflight = true;
   try {
+    const asked = sid;
     const f = await api(`/api/frame?sid=${sid}&after=${after}`);
-    if (f.steps.length) { lastStepAt = performance.now(); enqueue(f.steps); after = f.steps[f.steps.length - 1].t; if (waking) { waking = false; loaded(); tag("live · your own swarm", true); } status(`Step ${f.t} · ${f.prompts_left} of 10 prompts left`); }
+    if (asked !== sid) return;  // the field changed while this request was out
+    const fresh = f.steps.filter((s) => s.t > after);
+    if (fresh.length) { lastStepAt = performance.now(); enqueue(fresh); after = fresh[fresh.length - 1].t; if (waking) { waking = false; loaded(); } if (!liveTagged) { liveTagged = true; tag("live · your own swarm", true); } status(`Step ${f.t} · ${f.prompts_left} of 10 prompts left`); }
     if (f.halted) { loaded(); waking = false; status(f.halted); }
     if (f.suggestion) suggest(f.suggestion);
   } catch (e) {
     if (e.status === 404) { sid = null; clearInterval(polling); status("Your field expired. Type a command to start a new one."); }
+  } finally {
+    inflight = false;
   }
 }
 async function send(text) {
-  showCommand(text);
   try {
     if (mode !== "live" || !sid) await goLive();
+    showCommand(text);
     const r = await api("/api/command", { sid, text });
     if (r.error) { status(r.error); return; }
     if (performance.now() - lastStepAt > 3000) { waking = true; loading("Waking the GPU", "The model sleeps when nobody is steering. The first command after a quiet spell takes up to a minute; after that it is instant."); }
   } catch (e) {
     loaded();
-    status(e.status === 503 || e.status === 429 ? e.message : "The live model is not reachable right now; showing a recorded run.");
-    if (mode !== "replay") startReplay();
+    if (e.status === 429 || e.status === 503) { showCommand(""); status(e.message); return; }  // a limit: say so, stay put
+    status("The live model is not reachable right now; showing a recorded run.");
+    if (mode !== "replay") { setLive(false); startReplay(); }
   }
 }
 function suggest(text) {
@@ -425,10 +475,24 @@ for (const p of PROMPTS) {
 }
 $("info").onclick = (e) => { e.stopPropagation(); $("info").classList.toggle("open"); };
 document.addEventListener("click", () => $("info").classList.remove("open"));
-$("reset").onclick = async () => { try { await goLive(); status("A new scene. Type an instruction."); } catch (e) { status("The live model is not reachable right now."); } };
+const DICE = $("reset").innerHTML;
+const PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6l8-4.8z" fill="currentColor"/></svg>run live';
+function setLive(on) {  // the prompt box and chips work only on your own live swarm
+  $("input").disabled = !on; document.querySelector(".go").disabled = !on;
+  $("chips").classList.toggle("off", !on);
+  $("input").placeholder = !on ? "press run live to steer your own swarm" : innerWidth < 640 ? "type an instruction" : "tell the swarm what to do";
+  $("reset").innerHTML = on ? DICE : PLAY;
+  $("reset").classList.toggle("start", !on);
+  $("reset").setAttribute("aria-label", on ? "Reset to a new random field" : "Start your own live swarm");
+}
+$("reset").onclick = async () => {
+  const first = mode !== "live";
+  try { await goLive(); setLive(true); status(first ? "Your own swarm. Type an instruction, or pick one." : "A new scene. Type an instruction."); if (first) $("input").focus(); }
+  catch (e) { status(e.status === 503 ? e.message : "The live model is not reachable right now; showing a recorded run."); }
+};
+setLive(false);
 $("form").onsubmit = (e) => { e.preventDefault(); const t = $("input").value.trim(); if (t) send(t); $("input").select(); };
 
-if (innerWidth < 640) $("input").placeholder = "type an instruction";
 startReplay();
 status("");
 fetch(API + "/api/status").catch(() => {});  // wake the server while the visitor reads
