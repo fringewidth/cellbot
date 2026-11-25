@@ -1,4 +1,4 @@
-"""Fine-tune a pretrained LM (Qwen3) as the readout policy (policy/model.py), on goal frames and
+"""Post-train a pretrained LM (Qwen3) as the readout policy (policy/model.py), on goal frames and
 on captions as text tokens, while distilling the frozen original on general text and GSM8K train
 problems so the LM keeps its language and world knowledge.
 
@@ -46,7 +46,7 @@ class LMConfig:
     play_cache: str = ""  # a directory written by play_data.cache_play (shared between runs)
     captions: str = ""  # caption records (jsonl); their variants are built here
     general: str = "hf"  # "hf" (FineWeb-Edu and GSM8K from the Hub) or a local text file for smoke tests
-    lora_rank: int = 0  # 0: full fine-tuning
+    lora_rank: int = 0  # 0: post-train every weight
     steps: int = 12000
     minutes: float = 0.0  # training-time budget; 0 means steps only
     goal_batch: int = 16
@@ -71,7 +71,7 @@ class LMConfig:
     final_test: bool = True  # False: end after training (a session that a resumed one will continue)
     save_latest: bool = True  # at every evaluation also save the latest weights and optimizer state, to resume from
     first_eval_step: int = 20  # one early evaluation, so a broken evaluation path fails in minutes, not hours
-    freeze_embeddings: bool = True  # full fine-tuning: keep the (tied) token embeddings and output head frozen
+    freeze_embeddings: bool = True  # post-training every weight: keep the (tied) token embeddings and output head frozen
     eval_windows: int = 128
     test_windows: int = 512
     gsm8k_problems: int = 100

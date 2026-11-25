@@ -9,7 +9,7 @@ position L (no rotary offset between them) and carry their place on the grid as 
 column embeddings.
 
 The null goal (classifier-free guidance) is the scene alone: goal and text keys are masked out.
-Optional LoRA on the LM's attention and MLP projections (rank 0 means full fine-tuning).
+Optional LoRA on the LM's attention and MLP projections (rank 0 post-trains every weight).
 """
 
 import math

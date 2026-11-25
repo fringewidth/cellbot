@@ -1,4 +1,4 @@
-"""RL fine-tuning of a Qwen LM policy (lm_train) on instructions sampled per scene: the
+"""RL post-training of a Qwen LM policy (lm_train) on instructions sampled per scene: the
 counterfactual coverage that play data with hindsight captions lacks (the same scene under other
 words, instructions already done, impossible ones).
 

@@ -1,7 +1,8 @@
 """The demo video: each task shows one scene run in MuJoCo (left) beside the grid the policy
-reads, a cellular automaton (right). Black and white, with muted colours for cheeses and boxes.
+reads, a cellular automaton (right). Grey and white, with the cheeses and boxes in colour.
 
     uv run python -m cellbot.demo.render --recordings runs/demo/mujoco.json --grid runs/demo/grid.json --out runs/demo/cellbot1.mp4
+    uv run python -m cellbot.demo.render --recordings a.json b.json --grid a-grid.json b-grid.json --out all.mp4   # several recordings in one video
 
 With --grid the right panel is the same scene (same seed) rolled out on the raw grid; without it,
 the right panel is the MuJoCo run itself as the policy saw it, snapped to the grid each step.
@@ -20,20 +21,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONT = Path(__file__).with_name("fonts") / "OpenSans.ttf"
 FPS = 30
-SATURATION = 0.3  # cheese and box colours keep their hue at this share of their saturation
 HOLD_SECONDS = 0.7  # the last frame of a task stays this long
 CARD_SECONDS = 2.5
 TYPE_SECONDS = 0.5  # a new command is typed in over this long, ending as it takes over
 HIGHLIGHT_SECONDS = 1.5  # a panel's command label stays bright this long after it changes
 STEER_FRAMES = 5  # frames per policy step in a steering task (slower, so each change can be seen)
 GREY = (170, 170, 170)
-
-
-def muted(rgb):
-    """rgb (0-1) with its saturation cut to SATURATION, around its own luminance."""
-    rgb = np.asarray(rgb, float)
-    grey = rgb @ np.array([0.299, 0.587, 0.114])
-    return np.clip(grey + SATURATION * (rgb - grey), 0, 1)
 
 
 def font(size, weight=b"Regular"):
@@ -56,7 +49,7 @@ def square_xy(row, col, size):
 
 
 def rgba(rgb):
-    return " ".join(f"{v:.2f}" for v in muted(rgb)) + " 1"
+    return " ".join(f"{v:.2f}" for v in rgb) + " 1"
 
 
 class Layout:
@@ -196,7 +189,7 @@ class CellView:
         self.cell = min(shape) // size
         self.width, self.height = shape
         self.walls = grid(episode["walls"], np.uint8, (size, size))
-        self.cheese_rgb = [(muted(c["rgb"]) * 255).astype(np.uint8) for c in episode["cheeses"]]
+        self.cheese_rgb = [(np.array(c["rgb"]) * 255).astype(np.uint8) for c in episode["cheeses"]]
 
     def pose(self, t):
         step = self.episode["steps"][min(int(t), len(self.episode["steps"]) - 1)]
@@ -218,7 +211,7 @@ class CellView:
             r, c, h, w = box["rect"]
             edge = (c * cell, r * cell, (c + w) * cell, (r + h) * cell)
             draw.rectangle((edge[0] - rim // 2, edge[1] - rim // 2, edge[2] + rim // 2, edge[3] + rim // 2), outline=(40, 40, 40), width=rim * 2)  # a white box shows on the light floor
-            draw.rectangle(edge, outline=tuple(int(255 * v) for v in muted(box["rgb"])), width=rim)
+            draw.rectangle(edge, outline=tuple(int(255 * v) for v in box["rgb"]), width=rim)
         frame = Image.new("RGB", (self.width, self.height), "black")
         frame.paste(image, ((self.width - size * cell) // 2, (self.height - size * cell) // 2))
         return np.asarray(frame)
@@ -419,16 +412,18 @@ def trimmed(episode, after):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recordings", required=True, help="cellbot.demo.record --physics mujoco output")
-    parser.add_argument("--grid", default="", help="cellbot.demo.record --physics grid output for the same instructions: the right panel then shows the same scene on the raw grid")
+    parser.add_argument("--recordings", nargs="+", required=True, help="cellbot.demo.record --physics mujoco outputs; their instructions are shown in order")
+    parser.add_argument("--grid", nargs="*", default=[], help="cellbot.demo.record --physics grid outputs for the same instructions: the right panel then shows the same scene on the raw grid")
     parser.add_argument("--out", required=True, help="the .mp4 to write; stills go beside it")
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--trim", type=int, default=4, help="end each run this many steps after its last instruction is met; -1 keeps the holding steps")
     parser.add_argument("--min_share", type=float, default=0.5)
+    parser.add_argument("--cards", action=argparse.BooleanOptionalAction, default=True, help="a card with the instruction and its success rate before each task")
     args = parser.parse_args()
     layout = Layout(args.height)
-    data = json.loads(Path(args.recordings).read_text())
-    grids = {e["instruction"]: e for e in json.loads(Path(args.grid).read_text())["instructions"]} if args.grid else {}
+    files = [json.loads(Path(path).read_text()) for path in args.recordings]
+    data = {**files[0], "instructions": [entry for f in files for entry in f["instructions"]]}
+    grids = {e["instruction"]: e for path in args.grid for e in json.loads(Path(path).read_text())["instructions"]}
     tasks = []
     for episode, entry in shown(data, args.min_share):
         grid_entry = grids.get(entry["instruction"])
@@ -444,10 +439,12 @@ def main():
     video = Video(out, layout)
     for number, (run, partner, entry, grid_entry) in enumerate(tasks, 1):
         print("task", number, entry["instruction"], flush=True)
-        video.add(intro_card(run, entry, number, len(tasks), grid_entry, layout), int(CARD_SECONDS * FPS))
+        if args.cards:
+            video.add(intro_card(run, entry, number, len(tasks), grid_entry, layout), int(CARD_SECONDS * FPS))
         frames = STEER_FRAMES if run["steering"] else data["frames_per_step"]
         right = "Cellular automaton" if grid_entry else "Cellular automaton (the grid the policy reads)"
-        still = render_task(video, run, partner, f"Task {number}/{len(tasks)}", frames, layout, data["size"], data["cheese_side"], right)
+        label = f"Task {number}/{len(tasks)}" if len(tasks) > 1 else ""
+        still = render_task(video, run, partner, label, frames, layout, data["size"], data["cheese_side"], right)
         still.save(out.with_name(f"{out.stem}-{number:02d}.png"))
     video.close()
     print("wrote", out, round(video.frames / FPS, 1), "s")

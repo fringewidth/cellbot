@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from cellbot.demo import live, record, render
+from cellbot.demo import live, record
 from cellbot.policy.actions import decode_field
 from cellbot.sim.world import observe
 from cellbot.tasks import suite as T
@@ -50,8 +50,3 @@ def test_video_tasks_have_scenes():
         assert record.INSTRUCTIONS[k]["commands"][0][0] == name.split(" -> ")[0]
         assert live.task_scene(k, seed) is not None
 
-
-def test_muted_keeps_grey_and_cuts_saturation():
-    assert render.muted([0.5, 0.5, 0.5]).tolist() == pytest.approx([0.5, 0.5, 0.5])
-    red = render.muted([0.9, 0.24, 0.24])
-    assert red[0] > red[1] == pytest.approx(red[2]) and red[0] - red[1] < 0.3 * 0.66 + 1e-6

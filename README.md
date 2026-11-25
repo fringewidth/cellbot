@@ -1,88 +1,102 @@
 # cellbot
 
-One language model steers a swarm of about 100 robots from plain English. Each step it reads the
-instruction and the whole grid, and gives every cell a move.
+cellbot1 is Qwen3-0.6B post-trained to control a swarm of about 100 robots from text. At every step it
+reads an instruction and the current state of a 32×32 cellular grid, and outputs a distribution over
+9 moves for every cell.
 
-![cellbot1 eating the red cheese, in MuJoCo and on the grid it reads](docs/media/eat-red.gif)
+![A swarm in MuJoCo given five instructions in turn](docs/media/steering.gif)
 
-- **Weights:** [huggingface.co/fringewidth/cellbot1](https://huggingface.co/fringewidth/cellbot1)
-- **Live demo:** [huggingface.co/spaces/fringewidth/cellbot](https://huggingface.co/spaces/fringewidth/cellbot)
+The run above is one swarm in MuJoCo given five instructions in turn: "eat the red cheese", "eat the
+green cheese", "stop", "move to the top right corner", "clear the board". Each instruction is replaced
+by the next while the swarm is still moving.
 
-## What it does
+[Live demo](https://huggingface.co/spaces/fringewidth/cellbot) · [Weights](https://huggingface.co/fringewidth/cellbot1) · [Training details](docs/TRAINING.md)
 
-The world is a 32 x 32 grid. Each square holds at most one robot, and there are walls, coloured
-cheeses (4 x 4 squares) and coloured boxes drawn on the floor. Each step, every robot moves to one of
-its 8 neighbours or stays. A cheese slides when enough robots push it together, and it is eaten when
-robots surround it. You type an instruction ("eat either yellow or purple", "go into the blue box",
-"move left") and the policy moves the swarm until it is done. A new instruction can be typed at any
-time and the swarm changes course.
+## Setup
 
-The same policy runs in [MuJoCo](https://mujoco.org), with rigid robots and cheeses. Each step the
-physics is snapped to the grid, which is all the policy ever sees. The video shows both worlds side by
-side: the physics on the left, the grid (a cellular automaton) on the right.
+The world is a 32×32 grid. Each cell holds at most one robot. A scene also has walls, up to 6
+coloured cheeses (4×4 cells each) and up to 3 coloured boxes, which are rectangles marked on the
+floor. At each step every robot either stays or moves to one of its 8 neighbours. A cheese slides one
+cell when three or more robots push it in the same direction, and it is eaten when robots cover
+enough of the cells around it.
+
+The same scenes also run in MuJoCo. There the robots are rigid discs driven toward the cell their
+move points to, and the cheeses are boxes with friction that takes three robots to overcome. After
+one simulated second, positions are snapped back to the grid, and the model sees only that grid.
+
+## Model
+
+The grid is encoded as 10 channels: robots, walls, a cheese mask and its RGB colour, a box mask and
+its RGB colour. It is split into 64 patches of 4×4 cells. Each patch is linearly projected to the
+model's hidden size and given learned row and column embeddings. The instruction is tokenised
+normally and placed before the patch tokens.
+
+The attention mask keeps text tokens causal over text only, as in pre-training, while patch tokens
+attend to all tokens. A linear layer maps each patch token's final hidden state to 16 cells × 9
+moves, so one forward pass gives 9,216 logits regardless of how many robots there are. Each robot
+samples the move of the cell it occupies.
+
+At inference, each step also computes the logits with the instruction masked out and samples from
+`null + 2 * (conditioned - null)` (classifier-free guidance).
+
+The trained parameters are a rank-64 LoRA on every attention and MLP projection, plus the patch
+projection, the position embeddings and the readout: about 41M in total. The base model's weights are
+frozen.
+
+Before settling on the linear readout, we compared it with a flow-matching action head of the kind
+used in π0, on a smaller model trained from scratch. On held-out episodes the readout closed 84% of the
+gap to replaying the recorded actions, against 61% for the flow head, and ran 2.4 times as many
+training steps per minute.
+
+## Post-training
+
+Training data came from three sources.
+
+1. Scripted experts. A task generator produces scenes and instructions from several families: eat a
+   cheese by colour or by a logical condition (either, all but, in order, nearest to a box), go into
+   a box or a region, move in a direction, form a shape or a letter, push a cheese into a box, catch
+   a cheese that runs away, and split into two groups. Each family has a programmatic checker. For
+   each task a scripted expert produces target points, and a shared controller turns them into a
+   move per cell. The model is trained by behaviour cloning on these episodes.
+1. Captioned play. LLM-written programs drove the swarm freely, and Claude Haiku 5.5 wrote four
+   instructions of different lengths and styles for each segment of those episodes.
+1. Distillation. On general text, instruction data and GSM8K problems, the model is trained to match
+   the frozen base model's outputs (a KL loss), so that its language ability is preserved. Held-out
+   perplexity was 28.0 at the start of the last run and 28.2 at the end.
+
+The instruction is dropped in 10% of training examples, which gives guidance its unconditioned
+baseline. Training used about 40 hours of Kaggle T4 time. It stopped when that compute ran out, with
+validation loss still decreasing (0.40 to 0.31 over the last run), so the checkpoint is undertrained.
+Hyperparameters and evaluation logs are in [docs/TRAINING.md](docs/TRAINING.md).
 
 ## Results
 
-Fresh scenes, 8 rollouts per instruction, success counted by each task's own checker (score at least
-0.99 at the end of the run, and no cheese eaten that was not asked for):
+Each instruction was run on 8 fresh scenes. A run counts as a success if the task's checker is
+satisfied at the end and no cheese was eaten that the instruction did not ask for. The model was
+trained only on the grid, so the MuJoCo column measures transfer to physics it never saw.
 
-| instruction | MuJoCo | raw grid |
+| instruction | MuJoCo | grid |
 | --- | --- | --- |
 | eat the red cheese | 8/8 | 7/8 |
 | eat either yellow or purple | 7/8 | 7/8 |
 | clear the board of cheese | 7/8 | 6/8 |
 | go into the blue box | 7/8 | 8/8 |
 | move left | 7/8 | 7/8 |
-| steering: "go into the blue box", then "eat the red cheese", then "move left", each replaced mid-motion | last one met 6/8 | last one met 7/8 |
 
-In the steering run, all three commands were met in 2/8 rollouts in each world.
+For the five-instruction sequence shown above, run on 24 fresh scenes, all five instructions were
+carried out in 12 runs and the last one in 21, both in MuJoCo and on the grid. An instruction counts as carried
+out once it has visibly taken effect (the cheese eaten, the swarm halted, at least half of the swarm in the
+corner) before the next one replaces it.
 
-The checkpoint is undertrained. Training stopped when compute ran out, with the validation loss still
-falling (0.40 at the start of the last stage, 0.31 at its last checkpoint).
-
-## How it works
-
-1. **Policy** (`cellbot.policy`). Qwen3-0.6B with a rank-64 LoRA. The instruction goes in as text
-   tokens. The grid (10 channels: robots, walls, cheese mask and colour, box mask and colour) goes in as
-   64 patch tokens of 4 x 4 squares, with learned row and column embeddings. Text tokens stay causal
-   among themselves, so the LM's language behaviour is unchanged. Scene tokens attend to everything.
-   A linear readout turns each scene token into 16 squares x 9 moves. One move per robot is sampled
-   from it every step, with classifier-free guidance 2.0 against the same scene with no instruction.
-1. **Tasks** (`cellbot.tasks`). Generated scenes and instruction families: eat cheeses by colour and
-   by logic (either, all but, in order, nearest to a box), go into a box, go to a region, move in a
-   direction, form a shape or a letter, herd a cheese into a box, catch a cheese that runs away, split
-   into two groups. Each family has a programmatic checker. Some wordings and compositions are held
-   out of training.
-1. **Experts** (`cellbot.experts`). Scripted experts turn a task into attractor points. One shared
-   controller turns the attractors into a move for every square. Their episodes are the
-   demonstrations.
-1. **Training** (`cellbot.training`). Behaviour cloning on the expert demonstrations, mixed with
-   captioned play episodes and with distillation of the frozen LM on general text, so the language
-   side is not lost. About 40 T4 hours in total. See [docs/TRAINING.md](docs/TRAINING.md).
-1. **Physics** (`cellbot.sim.mujoco_world`). Robots are flat cylinders on slide joints. Cheeses are
-   boxes whose friction takes three robots to overcome, as on the grid. Each policy step drives every
-   robot toward its chosen neighbour square for one simulated second, then snaps the scene back to
-   the grid.
-
-More on the design, and on what did not work, in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
-
-## Run it
+## Running it
 
 ```sh
 git clone https://github.com/fringewidth/cellbot && cd cellbot
-uv sync                     # or: pip install -e .
+uv sync                                   # or: pip install -e .
+uv run python -m cellbot.demo.server      # the live demo on a local GPU (cuda or mps), at http://127.0.0.1:8790
 ```
 
-Run one instruction and save a video in the demo's style. This downloads Qwen3-0.6B and the cellbot1
-weights from Hugging Face on first use. It runs on CUDA, Apple MPS or CPU.
-
-```sh
-uv run python -m cellbot.demo.live "eat the red cheese" --out runs/live.mp4
-uv run python -m cellbot.demo.live "go into the blue box" "move left" --steps 60 --out runs/steer.mp4   # one command after another
-uv run python -m cellbot.demo.live --task 5 --out runs/video-task.mp4                                  # a task from the video, on its scene
-```
-
-Use the policy directly:
+From Python:
 
 ```python
 import numpy as np
@@ -92,57 +106,46 @@ from cellbot.policy.inference import lm_sampler, load_policy, tokens
 from cellbot.sim.world import observe, step
 from cellbot.tasks import suite as T
 
-device = torch.device("cpu")
+device = torch.device("cuda")  # or "mps", "cpu"
 policy, tokenizer = load_policy("fringewidth/cellbot1", device)
 sample = lm_sampler(policy, guidance=2.0, n=T.SIZE // 4)
 
 scene = T.sample_scene(np.random.default_rng(0), cheeses=(1, 4), boxes=(0, 2))
 world, _ = T.stack([scene])
-cond = tokens(tokenizer, ["clear the board of cheese"], device)
+world = world.to(device)
+cond = tokens(tokenizer, ["clear the board"], device)
 with torch.no_grad():
     for _ in range(100):
-        _, field = sample(observe(world), cond)  # a move for every square
+        _, field = sample(observe(world), cond)
         world, info = step(world, field)
 ```
 
-Reproduce the demo video: record 8 rollouts of each of the video's instructions in both worlds, then
-render.
+`cellbot.demo.record` records rollouts and `cellbot.demo.render` turns them into videos like the one
+above.
 
-```sh
-uv run python -m cellbot.demo.record --physics mujoco --out runs/demo/mujoco.json
-uv run python -m cellbot.demo.record --physics grid --out runs/demo/grid.json
-uv run python -m cellbot.demo.render --recordings runs/demo/mujoco.json --grid runs/demo/grid.json --out runs/demo/cellbot1.mp4
-```
+## Repository
+
+| path | contents |
+| --- | --- |
+| `src/cellbot/policy/` | the model, loading and sampling |
+| `src/cellbot/sim/` | the grid world and the MuJoCo version |
+| `src/cellbot/tasks/` | task families, scene generation and checkers |
+| `src/cellbot/experts/` | scripted experts and the shared controller |
+| `src/cellbot/training/` | post-training code |
+| `src/cellbot/demo/` | recording, rendering and the live demo server |
+| `site/`, `deploy/` | the demo website and its Modal deployment |
 
 Tests: `uv run pytest -q`.
 
-## Layout
-
-```
-src/cellbot/
-  sim/        world.py (the grid: robots, walls, cheeses, boxes, pushing, eating), mujoco_world.py
-  tasks/      suite.py (scenes, instruction families, checkers), facts.py, goal_eval.py, shapes.py,
-              grounding.py, wordings.json (held-out paraphrases)
-  experts/    attractor.py (scripted experts, demonstration stores), controller.py
-  policy/     model.py (the LM policy), inference.py (loading, sampling), actions.py (the move codes)
-  steer.py    many swarms stepped together, each with its own instruction
-  demo/       record.py, render.py (the video), live.py (one run on demand; the Space uses it)
-  training/   expert_sft.py (the last stage), lm_train.py (the first), play data and captions,
-              rl.py (RL on robot actions; it did not help), custom_*.py (the model before the LM,
-              whose data code the LM trainers reuse)
-space/        the Hugging Face Space
-tests/
-```
-
 ## Limitations
 
-1. Cheeses in corners and pockets are hard to push or surround.
-1. Free text far from the task families gets an attempt, but nothing checks it.
-1. The grid is 32 x 32 with up to 6 cheeses and 3 boxes. The policy sees only the current frame.
-1. Nothing here has run on real robots.
+Everything here is simulated, on a 32×32 grid. The model sees only the current frame. Cheeses in
+corners or narrow pockets are hard to surround. Pushing a cheese to a chosen place is weak: on 32
+fresh tasks each, the model pushed a cheese into the nearest corner it was asked for in 4, and moved
+a cheese at least 2 cells in a named direction, without eating it, in 5
+(`python -m cellbot.tasks.evaluate push`).
 
 ## License
 
-Code and weights: Apache-2.0. The base model,
-[Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B), is Apache-2.0. Open Sans
-(`src/cellbot/demo/fonts/`) is under the SIL Open Font License.
+Code and weights are Apache-2.0. The base model, Qwen3-0.6B, is Apache-2.0. Open Sans is under the SIL
+Open Font License.

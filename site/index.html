@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cellbot1</title>
+<meta name="description" content="Post-training a language model to steer a robot swarm from plain English. Live demo in MuJoCo.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #fbfaf6;
+    --ink: #1c1c1a;
+    --soft: #55544f;
+    --faint: #8d8b84;
+    --rule: #e4e1d8;
+    --panel: #f2f0ea;
+    --serif: "Inter", system-ui, sans-serif;
+    --sans: "Inter", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body { margin: 0; color: var(--ink); font: 400 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+  main { max-width: 960px; margin: 0 auto; padding: 40px 16px 16px; }
+  header { text-align: center; margin-bottom: 28px; }
+  h1 { font: 600 44px/1.05 var(--sans); letter-spacing: -0.03em; margin: 0 0 14px; }
+  .subtitle { font: 400 18px/1.5 var(--sans); color: var(--soft); margin: 0 auto 20px; max-width: 640px; }
+  .links { display: flex; gap: 10px; justify-content: center; align-items: baseline; flex-wrap: wrap; font: 500 14px/1.4 var(--sans); }
+  .links .sep { color: var(--faint); }
+  .links a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--faint); text-decoration-thickness: 1px; text-underline-offset: 3px; transition: text-decoration-color .2s; }
+  .links a:hover { text-decoration-color: var(--ink); }
+  a { color: inherit; }
+  figure { margin: 0 auto; width: min(100%, calc((100vh - 395px) * 1.6)); min-width: min(100%, 520px); }
+
+  /* the live viewer */
+  .viewer { position: relative; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden; background: var(--panel); border: 1px solid var(--rule); box-shadow: 0 1px 0 #fff inset, 0 20px 40px -28px rgba(30, 30, 20, .35); }
+  .viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .tag { position: absolute; left: 14px; top: 12px; font: 400 12px/1 var(--mono); color: var(--soft); background: rgba(251, 250, 246, .86); backdrop-filter: blur(6px); border: 1px solid var(--rule); border-radius: 999px; padding: 7px 11px; display: flex; gap: 8px; align-items: center; max-width: calc(100% - 140px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .tag.live .dot { background: #d6402b; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .command { position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; pointer-events: none; }
+  .command span { font: 500 20px/1.3 var(--sans); letter-spacing: -0.01em; background: rgba(251, 250, 246, .9); backdrop-filter: blur(6px); padding: 6px 16px; border-radius: 10px; border: 1px solid var(--rule); }
+  .command span:empty { display: none; }
+  .events { position: absolute; right: 14px; top: 50px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .events span { font: 400 12px/1 var(--mono); background: var(--ink); color: var(--paper); padding: 7px 10px; border-radius: 999px; animation: fade 2.8s forwards; }
+  @keyframes fade { 0% { opacity: 0; transform: translateY(-4px); } 12% { opacity: 1; transform: none; } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+  .loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; flex-direction: column; align-items: center; gap: 12px; padding: 18px 22px 16px; min-width: 260px; background: rgba(251, 250, 246, .92); backdrop-filter: blur(8px); border: 1px solid var(--rule); border-radius: 14px; box-shadow: 0 18px 40px -26px rgba(30, 30, 20, .45); }
+  .loading.show { display: flex; }
+  .loading .track { width: 220px; height: 3px; border-radius: 3px; background: var(--rule); overflow: hidden; position: relative; }
+  .loading .track i { position: absolute; top: 0; bottom: 0; width: 38%; background: var(--ink); border-radius: 3px; animation: slide 1.3s ease-in-out infinite; }
+  @keyframes slide { 0% { left: -38%; } 100% { left: 100%; } }
+  .loading .what { font: 500 15px/1.2 var(--sans); }
+  .loading .why { font: 400 12px/1.4 var(--sans); color: var(--soft); text-align: center; max-width: 260px; }
+  .console { margin-top: 12px; }
+  form { display: flex; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--rule); border-radius: 12px; padding: 6px 6px 6px 16px; transition: border-color .2s; }
+  form:focus-within { border-color: var(--ink); }
+  form .prompt { font: 400 14px var(--mono); color: var(--faint); }
+  input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: 400 16px/1.2 var(--sans); color: var(--ink); padding: 10px 0; }
+  input::placeholder { color: #aaa79e; }
+  button { font: 500 13px/1 var(--sans); border-radius: 9px; cursor: pointer; transition: background .2s, border-color .2s, color .2s; }
+  .go { border: 0; background: var(--ink); color: var(--paper); padding: 12px 16px; }
+  .go:hover { background: #3a3a36; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; align-items: center; }
+  .chip { white-space: nowrap; }
+  .controls { position: absolute; right: 12px; top: 12px; z-index: 2; display: flex; gap: 6px; align-items: center; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/1 var(--sans); color: var(--soft); background: rgba(251, 250, 246, .86); backdrop-filter: blur(6px); border: 1px solid var(--rule); border-radius: 999px; padding: 6px 11px; height: 28px; }
+  .pill:hover, .pill:focus-visible { color: var(--ink); border-color: var(--ink); outline: none; }
+  .pill svg { width: 14px; height: 14px; flex: none; }
+  .pill svg.dice { width: 19px; }
+  .info { padding: 0; width: 28px; justify-content: center; position: relative; }
+  .info .tip { position: absolute; right: 0; top: calc(100% + 8px); width: max-content; max-width: 240px; font: 400 12px/1.4 var(--sans); color: var(--paper); background: var(--ink); padding: 8px 10px; border-radius: 8px; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .15s, transform .15s; }
+  .info:hover .tip, .info:focus .tip, .info.open .tip { opacity: 1; transform: none; }
+  .chips .label { font: 400 13px var(--sans); color: var(--faint); margin-right: 2px; }
+  .chip { border: 1px solid var(--rule); background: transparent; color: var(--ink); padding: 9px 12px; font: 400 14px/1 var(--sans); }
+  .chip:hover { border-color: var(--ink); background: #fff; }
+  .chip.small { font: 500 12px/1 var(--sans); font-style: normal; color: var(--soft); }
+  .status { font: 400 13px/1.4 var(--sans); color: var(--soft); margin-top: 6px; min-height: 18px; }
+
+  footer { width: min(100%, calc((100vh - 395px) * 1.6)); min-width: min(100%, 520px); margin: 18px auto 0; padding-top: 10px; border-top: 1px solid var(--rule); font: 400 13px var(--sans); color: var(--faint); display: flex; justify-content: flex-end; }
+  @media (max-width: 640px) {
+    main { padding: 12px 12px 16px; }
+    header { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 10px; text-align: left; }
+    h1 { font-size: 21px; margin: 0; }
+    .links { justify-content: flex-start; }
+    figure, footer { width: 100%; min-width: 0; }
+    .subtitle, footer, .chips .label { display: none; }
+    .links { gap: 6px; }
+    .links { font-size: 13px; }
+    .viewer { aspect-ratio: auto; height: 58vh; border-radius: 10px; }
+    .tag { left: 8px; top: 8px; font-size: 10px; padding: 5px 8px; gap: 6px; }
+    .tag .dot { width: 6px; height: 6px; }
+    .events { top: 40px; right: 8px; }
+    .events span { font-size: 10px; padding: 5px 8px; }
+    .command { bottom: 10px; }
+    .command span { font-size: 14px; padding: 4px 10px; border-radius: 8px; }
+    form { padding: 4px 4px 4px 12px; border-radius: 10px; }
+    input { font-size: 16px; padding: 8px 0; }
+    .go { padding: 9px 12px; font-size: 12px; }
+    .chips { flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); padding-right: 28px; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: none; }
+    .controls { right: 8px; top: 8px; gap: 4px; }
+    .pill { font-size: 10px; height: 24px; padding: 4px 8px; }
+    .info { width: 24px; padding: 0; }
+    .pill svg { width: 12px; height: 12px; }
+    .pill svg.dice { width: 16px; }
+    .tag { max-width: calc(100% - 100px); }
+    .chip { padding: 6px 9px; font-size: 12px; border-radius: 8px; }
+    .status { font-size: 12px; }
+    .loading { min-width: 0; width: 80%; padding: 14px 16px 12px; }
+    .loading .track { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>cellbot1</h1>
+    <p class="subtitle">Qwen3-0.6B post-trained to steer a robot swarm. Type an instruction.</p>
+    <div class="links">
+      <a href="https://github.com/fringewidth/cellbot">Code</a><span class="sep">·</span>
+      <a href="https://huggingface.co/fringewidth/cellbot1">Weights</a><span class="sep">·</span>
+      <a href="https://github.com/fringewidth/cellbot/blob/main/docs/TRAINING.md">Training details</a>
+    </div>
+  </header>
+
+  <figure>
+    <div class="viewer" id="viewer">
+      <canvas id="canvas"></canvas>
+      <div class="tag" id="tag"><span class="dot"></span><span id="tagText">loading</span></div>
+      <div class="controls">
+        <button class="pill info" id="info" type="button" aria-label="About this simulation">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.2v4" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".55" fill="currentColor" stroke="none"/></svg>
+          <span class="tip" role="tooltip">Physics simulated in MuJoCo, rendered with three.js.</span>
+        </button>
+        <button class="pill" id="reset" type="button" aria-label="Reset to a new random field">
+          <svg class="dice" viewBox="0 0 22 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+            <g transform="rotate(-14 6 9.5)"><rect x="1.5" y="5" width="9" height="9" rx="2"/><circle cx="4" cy="7.5" r=".75" fill="currentColor" stroke="none"/><circle cx="6" cy="9.5" r=".75" fill="currentColor" stroke="none"/><circle cx="8" cy="11.5" r=".75" fill="currentColor" stroke="none"/></g>
+            <g transform="rotate(12 15.5 6.5)"><rect x="11" y="2" width="9" height="9" rx="2" fill="var(--paper)"/><circle cx="13.5" cy="4.5" r=".75" fill="currentColor" stroke="none"/><circle cx="17.5" cy="4.5" r=".75" fill="currentColor" stroke="none"/><circle cx="13.5" cy="8.5" r=".75" fill="currentColor" stroke="none"/><circle cx="17.5" cy="8.5" r=".75" fill="currentColor" stroke="none"/></g>
+          </svg>
+          reset
+        </button>
+      </div>
+      <div class="events" id="events"></div>
+      <div class="command"><span id="command"></span></div>
+      <div class="loading" id="loading"><span class="what" id="loadingWhat"></span><div class="track"><i></i></div><span class="why" id="loadingWhy"></span></div>
+    </div>
+    <div class="console">
+      <form id="form" autocomplete="off">
+        <span class="prompt">&rsaquo;</span>
+        <input id="input" maxlength="120" placeholder="tell the swarm what to do" aria-label="Instruction">
+        <button class="go" type="submit">Steer</button>
+      </form>
+      <div class="chips" id="chips">
+        <span class="label">Try</span>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+  </figure>
+
+  <footer>
+    <span>Apache-2.0</span>
+  </footer>
+</main>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname) || location.hostname.endsWith(".modal.run");
+const API = LOCAL ? "" : "https://fringewidth--cellbot.modal.run";
+const PROMPTS = ["eat the red cheese", "eat the green cheese", "stop", "move to the top right corner", "clear the board"];
+const COLOURS = {  // cellbot.sim.world's palette, by index
+  names: ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "pink"],
+  rgb: [[0.90, 0.24, 0.24], [0.24, 0.78, 0.35], [0.27, 0.43, 0.94], [0.94, 0.82, 0.20], [0.97, 0.56, 0.14], [0.58, 0.31, 0.82], [0.96, 0.96, 0.96], [0.18, 0.82, 0.86], [0.98, 0.56, 0.78]],
+};
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------- three.js scene
+const canvas = $("canvas");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f0ea);
+scene.fog = new THREE.Fog(0xf2f0ea, 70, 130);
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 400);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.maxPolarAngle = 1.25;
+controls.minDistance = 25;
+controls.maxDistance = 160;
+controls.enablePan = false;
+scene.add(new THREE.HemisphereLight(0xffffff, 0xd8d2c4, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 120 });
+sun.shadow.bias = -0.0004;
+sun.shadow.radius = 4;
+scene.add(sun, sun.target);
+
+function checker(size) {
+  const c = document.createElement("canvas"); c.width = c.height = 512;
+  const g = c.getContext("2d"), n = 16, s = 512 / n;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { g.fillStyle = (x + y) % 2 ? "#e9e7e1" : "#f7f6f2"; g.fillRect(x * s, y * s, s, s); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(size / 16 * 1.5, size / 16 * 1.5); t.anisotropy = 8;
+  return t;
+}
+
+let world = null;  // the meshes of the scene on show
+function clearWorld() {
+  if (!world) return;
+  scene.remove(world.group);
+  world.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose?.(); });
+  world = null;
+}
+function colour(index) { const c = COLOURS.rgb[index] || [1, 1, 1]; return new THREE.Color().setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace); }
+
+function buildWorld(spec) {
+  clearWorld();
+  const N = spec.size, side = spec.cheese_side, group = new THREE.Group();
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(N * 1.5, N * 1.5), new THREE.MeshStandardMaterial({ map: checker(N), roughness: 0.95 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(N / 2, 0, N / 2); floor.receiveShadow = true; group.add(floor);
+  const rim = new THREE.MeshStandardMaterial({ color: 0x3a3a36, roughness: 0.6 });
+  for (const [x, z, w, d] of [[N / 2, -0.15, N + 0.6, 0.3], [N / 2, N + 0.15, N + 0.6, 0.3], [-0.15, N / 2, 0.3, N], [N + 0.15, N / 2, 0.3, N]]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.4, d), rim); m.position.set(x, 0.2, z); m.castShadow = m.receiveShadow = true; group.add(m);
+  }
+  const cells = [...spec.walls].map((v, i) => (v === "1" ? i : -1)).filter((i) => i >= 0);
+  if (cells.length) {
+    const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.85 }), cells.length);
+    const m = new THREE.Matrix4();
+    cells.forEach((i, k) => { m.makeTranslation((i % N) + 0.5, 0.5, Math.floor(i / N) + 0.5); walls.setMatrixAt(k, m); });
+    walls.castShadow = walls.receiveShadow = true; group.add(walls);
+  }
+  for (const [r, c, h, w, col] of spec.boxes) {  // floor rectangles
+    const mat = new THREE.MeshStandardMaterial({ color: colour(col), roughness: 0.6 });
+    for (const [x, z, sw, sd] of [[c + w / 2, r, w, 0.16], [c + w / 2, r + h, w, 0.16], [c, r + h / 2, 0.16, h], [c + w, r + h / 2, 0.16, h]]) {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(sw + 0.16, 0.03, sd + 0.0), mat); s.position.set(x, 0.015, z); s.receiveShadow = true; group.add(s);
+    }
+  }
+  const cheeses = spec.cheese_colours.map((col) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(side, side, side), new THREE.MeshStandardMaterial({ color: colour(col), roughness: 0.45, metalness: 0.0 }));
+    m.castShadow = m.receiveShadow = true; group.add(m); return m;
+  });
+  const n = spec.robots;
+  const disc = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.4, 0.4, 0.12, 28), new THREE.MeshStandardMaterial({ color: 0xf6f5f0, roughness: 0.35 }), n);
+  const hub = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 16), new THREE.MeshStandardMaterial({ color: 0x1c1c1a, roughness: 0.4 }), n);
+  const legs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.035, 0.035, 0.24, 8), new THREE.MeshStandardMaterial({ color: 0x2a2a27, roughness: 0.6 }), n * 3);
+  for (const mesh of [disc, hub, legs]) { mesh.castShadow = true; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); group.add(mesh); }
+  scene.add(group);
+  world = { spec, group, cheeses, disc, hub, legs, n, side, shrink: new Map(), alive: spec.cheese_colours.map(() => true) };
+  frameCamera(N);
+}
+
+const m4 = new THREE.Matrix4(), LEG = [[0, 0.26], [-0.225, -0.13], [0.225, -0.13]];
+function pose(positions) {  // positions: (N + K) x 2 of (row, col)
+  if (!world) return;
+  const { n, side, disc, hub, legs, cheeses } = world;
+  for (let k = 0; k < n; k++) {
+    const x = positions[2 * k + 1] + 0.5, z = positions[2 * k] + 0.5;
+    m4.makeTranslation(x, 0.3, z); disc.setMatrixAt(k, m4);
+    m4.makeTranslation(x, 0.4, z); hub.setMatrixAt(k, m4);
+    for (let j = 0; j < 3; j++) { m4.makeTranslation(x + LEG[j][0], 0.12, z + LEG[j][1]); legs.setMatrixAt(3 * k + j, m4); }
+  }
+  disc.instanceMatrix.needsUpdate = hub.instanceMatrix.needsUpdate = legs.instanceMatrix.needsUpdate = true;
+  const now = performance.now();
+  cheeses.forEach((mesh, k) => {
+    const r = positions[2 * (n + k)], c = positions[2 * (n + k) + 1];
+    let s = 1;
+    if (world.shrink.has(k)) s = Math.max(0, 1 - (now - world.shrink.get(k)) / 500);
+    mesh.scale.setScalar(Math.max(s, 0.001)); mesh.visible = s > 0;
+    mesh.position.set(c + side / 2, (side / 2) * s, r + side / 2);
+  });
+}
+
+function frameCamera(N) {
+  // far enough that the whole arena (with its rim) fits across the view, whatever the viewer's shape
+  const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+  const across = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * aspect;
+  const d = Math.min(150, Math.max(56, (N / 2 + 2) / across * 1.12 + 8));
+  controls.target.set(N / 2, 0, N / 2 + 1);
+  camera.position.set(N / 2, d * 0.78, N / 2 + d * 0.62);
+  sun.position.set(N / 2 - 10, 50, N / 2 + 18); sun.target.position.set(N / 2, 0, N / 2);
+  controls.update();
+}
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * renderer.getPixelRatio()) || canvas.height !== Math.round(h * renderer.getPixelRatio())) {
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    if (world) frameCamera(world.spec.size);
+  }
+}
+
+// ---------------------------------------------------------------- playback
+// A step: {t, path: (F, N + K, 2) float16 base64, alive: [bool], events: [str], command?: str}.
+function f16(b64) {
+  const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  const h = new Uint16Array(bytes.buffer), out = new Float32Array(h.length);
+  for (let i = 0; i < h.length; i++) {
+    const v = h[i], s = v & 0x8000 ? -1 : 1, e = (v >> 10) & 0x1f, m = v & 0x3ff;
+    out[i] = e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15);
+  }
+  return out;
+}
+const player = { queue: [], current: null, started: 0, stepMs: 250, frames: 6, last: null };
+function enqueue(steps) { for (const s of steps) player.queue.push({ ...s, data: f16(s.path) }); }
+function advance(now) {
+  if (!world) return;
+  if (!player.current || now - player.started >= player.stepMs) {
+    if (!player.queue.length) { if (player.current) pose(player.current.data.subarray(lastFrameOffset(player.current))); return; }
+    const lag = player.queue.length > 6 ? 0.6 : 1;  // catch up when behind
+    player.current = player.queue.shift(); player.started = now; player.stepMsNow = player.stepMs * lag;
+    onStep(player.current);
+  }
+  const cur = player.current, per = (world.n + world.cheeses.length) * 2, frames = cur.data.length / per;
+  const f = Math.min(frames - 1, Math.floor(((now - player.started) / (player.stepMsNow || player.stepMs)) * frames));
+  pose(cur.data.subarray(f * per, (f + 1) * per));
+}
+function lastFrameOffset(step) { const per = (world.n + world.cheeses.length) * 2; return step.data.length - per; }
+function onStep(step) {
+  step.alive.forEach((a, k) => { if (!a && world.alive[k]) { world.alive[k] = false; world.shrink.set(k, performance.now()); } });
+  for (const e of step.events || []) toast(e);
+  if (step.command !== undefined) showCommand(step.command);
+}
+function toast(text) { const s = document.createElement("span"); s.textContent = text; $("events").appendChild(s); setTimeout(() => s.remove(), 2800); }
+function showCommand(text) { $("command").textContent = text ? `“${text}”` : ""; }
+function tag(text, live) { $("tagText").textContent = text; $("tag").classList.toggle("live", !!live); }
+function status(text) { $("status").textContent = text; }
+let loadingTimer = null;
+function loading(what, why) {  // an overlay with a moving bar and the seconds waited so far
+  clearInterval(loadingTimer);
+  const t0 = performance.now(), tick = () => { $("loadingWhat").textContent = `${what} · ${Math.round((performance.now() - t0) / 1000)} s`; };
+  $("loadingWhy").textContent = why || ""; tick(); loadingTimer = setInterval(tick, 500); $("loading").classList.add("show");
+}
+function loaded() { clearInterval(loadingTimer); $("loading").classList.remove("show"); }
+
+renderer.setAnimationLoop((now) => { resize(); controls.update(); advance(now); renderer.render(scene, camera); });
+
+// ---------------------------------------------------------------- the recorded run (replay)
+let mode = "replay", replay = null, replayTimer = null;
+async function startReplay() {
+  mode = "replay";
+  try { replay = replay || await (await fetch("replay.json")).json(); }
+  catch (e) { tag("offline"); return; }
+  const play = () => {
+    if (mode !== "replay") return;
+    buildWorld(replay.start);
+    pose(f16(replay.start.positions));
+    player.queue = []; player.current = null; player.stepMs = 1000 / 5;
+    enqueue(replay.steps.map((s) => ({ ...s, command: replay.commands[s.command] })));
+    tag(innerWidth < 640 ? "recorded run · type below to go live" : "recorded run · type a prompt below to run it live", false);
+    replayTimer = setTimeout(play, replay.steps.length * player.stepMs + 2500);
+  };
+  play();
+}
+
+// ---------------------------------------------------------------- live
+let sid = null, after = -1, polling = null, waking = false, lastStepAt = 0;
+async function api(path, body) {
+  const r = await fetch(API + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data.error || `error ${r.status}`), { status: r.status });
+  return data;
+}
+async function goLive() {
+  loading("Starting your swarm", "Your own field in MuJoCo, on the server.");
+  status("");
+  const spec = await api("/api/new", { sid }).finally(loaded);
+  sid = spec.sid; after = spec.t;
+  mode = "live"; clearTimeout(replayTimer);
+  buildWorld(spec); pose(f16(spec.positions));
+  player.queue = []; player.current = null;
+  const st = await api("/api/status").catch(() => ({}));
+  player.stepMs = (st.step_seconds || 0.25) * 1000;
+  tag("live · waiting for your first command", false);
+  clearInterval(polling); polling = setInterval(poll, 200);
+}
+async function poll() {
+  if (!sid) return;
+  try {
+    const f = await api(`/api/frame?sid=${sid}&after=${after}`);
+    if (f.steps.length) { lastStepAt = performance.now(); enqueue(f.steps); after = f.steps[f.steps.length - 1].t; if (waking) { waking = false; loaded(); tag("live · your own swarm", true); } status(`Step ${f.t} · ${f.prompts_left} of 10 prompts left`); }
+    if (f.halted) { loaded(); waking = false; status(f.halted); }
+    if (f.suggestion) suggest(f.suggestion);
+  } catch (e) {
+    if (e.status === 404) { sid = null; clearInterval(polling); status("Your field expired. Type a command to start a new one."); }
+  }
+}
+async function send(text) {
+  showCommand(text);
+  try {
+    if (mode !== "live" || !sid) await goLive();
+    const r = await api("/api/command", { sid, text });
+    if (r.error) { status(r.error); return; }
+    if (performance.now() - lastStepAt > 3000) { waking = true; loading("Waking the GPU", "The model sleeps when nobody is steering. The first command after a quiet spell takes up to a minute; after that it is instant."); }
+  } catch (e) {
+    loaded();
+    status(e.status === 503 || e.status === 429 ? e.message : "The live model is not reachable right now; showing a recorded run.");
+    if (mode !== "replay") startReplay();
+  }
+}
+function suggest(text) {
+  let chip = document.querySelector(".chip.suggested");
+  if (!chip) { chip = document.createElement("button"); chip.type = "button"; chip.className = "chip suggested"; $("chips").appendChild(chip); }
+  chip.textContent = text; chip.onclick = () => { $("input").value = text; send(text); };
+}
+
+for (const p of PROMPTS) {
+  const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = p;
+  b.onclick = () => { $("input").value = p; send(p); }; $("chips").appendChild(b);
+}
+$("info").onclick = (e) => { e.stopPropagation(); $("info").classList.toggle("open"); };
+document.addEventListener("click", () => $("info").classList.remove("open"));
+$("reset").onclick = async () => { try { await goLive(); status("A new scene. Type an instruction."); } catch (e) { status("The live model is not reachable right now."); } };
+$("form").onsubmit = (e) => { e.preventDefault(); const t = $("input").value.trim(); if (t) send(t); $("input").select(); };
+
+if (innerWidth < 640) $("input").placeholder = "type an instruction";
+startReplay();
+status("");
+fetch(API + "/api/status").catch(() => {});  // wake the server while the visitor reads
+</script>
+</body>
+</html>

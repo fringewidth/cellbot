@@ -9,7 +9,7 @@ Its embeddings stay frozen.
 
 The policy learns from play episodes: small programs written by LLM agents drive the swarm
 through the shared controller (`training/play.py`, `training/play_cli.py`). Their episodes are cut
-into windows at phase boundaries, and each window is captioned by Claude Haiku with four
+into windows at phase boundaries, and each window is captioned by Claude Haiku 5.5 with four
 instructions of different lengths (`training/caption.py`, `training/CAPTION_BRIEF.md`). The policy
 is trained to predict the recorded moves from the caption, or from the window's end frame as a goal
 image. At the same time the LM with LoRA is distilled toward the frozen original on general text,

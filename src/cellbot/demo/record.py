@@ -41,7 +41,8 @@ from cellbot.tasks import suite as T
 from cellbot.tasks.shapes import shape_mask, text_mask
 
 CHANNELS = ("mass", "wall", "cheese mask", "cheese R", "cheese G", "cheese B", "box mask", "box R", "box G", "box B")
-VIDEO = (0, 2, 3, 5, 7, 16)  # the INSTRUCTIONS in the demo video
+VIDEO = (0, 2, 3, 5, 7, 17)  # the INSTRUCTIONS in the demo video
+STEERING = 17  # the five-command steering run of the README and the website
 
 
 def match_robots(previous, intended, current):
@@ -223,6 +224,12 @@ def go_region(text, r):
     return lambda scene: T.Task("place", text, {"region": r, "forbid": present(scene)}, "")
 
 
+def stop(text):
+    """Stand still: scored by Rollout as the run of steps in which no robot changed square
+    (STILL_STEPS of them for a full score), nothing eaten."""
+    return lambda scene: T.Task("still", text, {"forbid": present(scene)}, "")
+
+
 def go_direction(text, d):
     """As tasks.place's move form: None when the swarm has no room to go that way (tasks.move_room)."""
 
@@ -279,7 +286,20 @@ INSTRUCTIONS = [
         "scenes": scenes_with((1, 3), (1, 3), ("red",), ("blue",)),
         "switch": (0.5, 80, 15),  # switch once the command has visibly taken effect and run 15 steps; 80 steps only as a safety net
     },
+    {  # live steering, five commands: the README's run
+        "keys": ["logic.single", "logic.single", "still", "place.region", "logic.all"],
+        "commands": [
+            ("eat the red cheese", eat_single("eat the red cheese", "red")),
+            ("eat the green cheese", eat_single("eat the green cheese", "green")),
+            ("stop", stop("stop")),
+            ("move to the top right corner", go_region("move to the top right corner", "top right")),
+            ("clear the board", eat_all("clear the board")),
+        ],
+        "scenes": scenes_with((3, 5), (0, 2), ("red", "green")),
+        "switch": (0.5, 80, 15),
+    },
 ]
+STILL_STEPS = 8  # steps without a robot changing square for "stop" to score 1
 
 
 def snapshot(world, i):
@@ -301,11 +321,13 @@ class Rollout:
 
     def begin(self, j, t, scene, first):
         self.j, self.start, self.scene, self.first = j, t, scene, first
+        self.last = first
         make = self.commands[j][1]
         self.scored = make is not None  # free text has no checker: it runs cap steps
         self.task = make(scene) if self.scored else None
         self.eaten = []
         self.met_at = None
+        self.still = 0  # "stop": steps in a row without a robot changing square
         self.end = t + self.cap
         if self.scored and self.task is None:  # the scene no longer allows the command (say, its cheese is gone)
             self.segments.append({"text": self.commands[j][0], "start": t, "met_at": None, "end": t, "success": False, "final_score": 0.0, "unasked": False, "eaten": [], "note": "not applicable"})
@@ -319,7 +341,14 @@ class Rollout:
             if t < self.end:
                 return False
             return self.close(t, world, i, runners, success=None, score=None, unasked=None)
-        score, unasked = T.score(self.task, self.scene, [self.first, snapshot(world, i)], self.eaten)
+        now = snapshot(world, i)
+        if self.task.family == "still":
+            moved = (now["mass"] >= 0.5) != (self.last["mass"] >= 0.5)
+            self.still = 0 if moved.any() else self.still + 1
+            score, unasked = min(self.still / STILL_STEPS, 1.0), bool(self.eaten)
+        else:
+            score, unasked = T.score(self.task, self.scene, [self.first, now], self.eaten)
+        self.last = now
         last = self.j == len(self.commands) - 1
         steering = self.switch is not None and not last
         if steering:

@@ -1,4 +1,0 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-PyOpenGL
-cellbot @ git+https://github.com/fringewidth/cellbot@main
