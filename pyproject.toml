@@ -27,7 +27,7 @@ train = ["datasets>=3.0"]
 
 [project.urls]
 Weights = "https://huggingface.co/fringewidth/cellbot1"
-Demo = "https://huggingface.co/spaces/fringewidth/cellbot"
+Demo = "https://cellbot.hrishik.me"
 
 [build-system]
 requires = ["hatchling"]

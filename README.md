@@ -10,7 +10,7 @@ The run above is one swarm in MuJoCo given five instructions in turn: "eat the r
 green cheese", "stop", "move to the top right corner", "clear the board". Each instruction is replaced
 by the next while the swarm is still moving.
 
-[Live demo](https://huggingface.co/spaces/fringewidth/cellbot) · [Weights](https://huggingface.co/fringewidth/cellbot1) · [Training details](docs/TRAINING.md)
+[Live demo](https://cellbot.hrishik.me) · [Weights](https://huggingface.co/fringewidth/cellbot1) · [Training details](docs/TRAINING.md)
 
 ## Setup
 
